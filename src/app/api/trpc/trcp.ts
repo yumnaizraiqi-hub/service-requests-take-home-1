@@ -3,32 +3,30 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { auth } from "~/server/auth";
 import { db } from "~/server/db";
-import { type NextRequest } from "next/server";
 
-export const createTRPCContext = async (req: NextRequest) => {
-  let session = null;
+export const createTRPCContext = async () => {
+  const session = await auth();
 
-  try {
-    session = await auth();
-  } catch {
-    session = null;
-  }
-
-  return { db, session };
+  return {
+    db,
+    session,
+  };
 };
 
 type Context = Awaited<ReturnType<typeof createTRPCContext>>;
 
 const t = initTRPC.context<Context>().create({
   transformer: superjson,
+
   errorFormatter({ shape, error }) {
     return {
       ...shape,
       data: {
         ...shape.data,
-        zodError: error.cause instanceof ZodError
-          ? error.cause.flatten()
-          : null,
+        zodError:
+          error.cause instanceof ZodError
+            ? error.cause.flatten()
+            : null,
       },
     };
   },
@@ -37,29 +35,45 @@ const t = initTRPC.context<Context>().create({
 export const createTRPCRouter = t.router;
 export const publicProcedure = t.procedure;
 
+/**
+ * Ensures user is authenticated before accessing protected routes.
+ */
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  if (!ctx.session?.user) {
+  const user = ctx.session?.user;
+
+  if (!user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
 
   return next({
     ctx: {
-      db: ctx.db,
-      session: ctx.session,
+      ...ctx,
+      session: {
+        ...ctx.session,
+        user,
+      },
     },
   });
 });
 
+/**
+ * Admin-only access control
+ */
 export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.session.user.role !== "admin") {
     throw new TRPCError({ code: "FORBIDDEN" });
   }
+
   return next({ ctx });
 });
 
+/**
+ * Customer-only access control
+ */
 export const customerProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.session.user.role !== "customer") {
     throw new TRPCError({ code: "FORBIDDEN" });
   }
+
   return next({ ctx });
 });

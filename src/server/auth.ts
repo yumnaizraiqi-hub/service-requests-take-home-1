@@ -1,76 +1,91 @@
 import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import type { JWT } from "next-auth/jwt";
 import { z } from "zod";
+import { db } from "~/server/db";
+import { users } from "~/server/db/schema";
 import { eq } from "drizzle-orm";
-import { db } from "./db";
-import { users } from "./db/schema";
+
+/* =========================
+   TYPE AUGMENTATION
+========================= */
 
 declare module "next-auth" {
   interface User {
-    role: "customer" | "admin";
+    id?: string;
+    role: "admin" | "customer";
   }
+
   interface Session {
     user: {
       id: string;
-      role: "customer" | "admin";
+      role: "admin" | "customer";
     } & DefaultSession["user"];
   }
 }
 
-declare module "next-auth/jwt" {
-  interface JWT {
-    id: string;
-    role: "customer" | "admin";
-  }
-}
+/* =========================
+   VALIDATION
+========================= */
 
 const credentialsSchema = z.object({
   email: z.string().email(),
 });
 
+/* =========================
+   AUTH CONFIG
+========================= */
+
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   trustHost: true,
-  providers: [
-    Credentials({
-      name: "Email",
-      credentials: {
-        email: { label: "Email", type: "email" },
-      },
-      authorize: async (credentials) => {
-        const parsed = credentialsSchema.safeParse(credentials);
-        if (!parsed.success) return null;
-
-        const user = await db.query.users.findFirst({
-          where: eq(users.email, parsed.data.email),
-        });
-        if (!user) return null;
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        };
-      },
-    }),
-  ],
   pages: {
     signIn: "/login",
   },
+
+  providers: [
+    Credentials({
+      credentials: {
+        email: { label: "Email", type: "email" },
+      },
+
+      async authorize(credentials) {
+        const parsed = credentialsSchema.safeParse(credentials);
+        if (!parsed.success) return null;
+
+        const email = parsed.data.email.toLowerCase();
+
+        const user = await db.query.users.findFirst({
+          where: eq(users.email, email),
+        });
+
+        if (user) {
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          };
+        }
+
+        return null;
+      },
+    }),
+  ],
+
   callbacks: {
-    jwt: ({ token, user }) => {
+    jwt({ token, user }) {
       if (user) {
-        if (user.id) token.id = user.id;
+        token.id = user.id;
         token.role = user.role;
       }
       return token;
     },
-    session: ({ session, token }) => {
-      session.user.id = token.id;
-      session.user.role = token.role;
+
+    session({ session, token }) {
+      if (session.user) {
+        session.user.id = token.id as string;
+        session.user.role = token.role as "admin" | "customer";
+      }
       return session;
     },
   },

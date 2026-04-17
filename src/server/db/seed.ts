@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 
 async function main() {
   console.log("Seeding users...");
-  await db.execute(sql`TRUNCATE TABLE ${users} RESTART IDENTITY CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE ${users} CASCADE`);
 
   await db.insert(users).values([
     {
